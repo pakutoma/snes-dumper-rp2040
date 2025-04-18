@@ -1,12 +1,33 @@
-import time
+from machine import Pin
 
 
-def set_address(io, addr, old_addr=None):
-    # A23-A0
-    ports = [io[1].porta, io[0].portb, io[0].porta]
+def init_connector():
+    # set zero to address
+    set_address(0)
 
-    return_addr = addr
-    for port in reversed(ports):
+    # init read pins
+    read_pins = []
+    for pin in range(0, 8):
+        read_pins.append(Pin(pin, Pin.IN))
+
+    # set /RD pin to low
+    Pin(19, Pin.OUT, value=0)
+    # set /RESET pin to high
+    Pin(20, Pin.OUT, value=1)
+
+    return read_pins
+
+
+def set_address(addr, old_addr=None):
+    addr_pins = []
+    for pin in range(8, 16):
+        addr_pins.append(Pin(pin, Pin.OUT, value=0))
+
+    buffer_pins = []
+    for pin in range(16, 19):
+        buffer_pins.append(Pin(pin, Pin.OUT, value=0))
+
+    for buffer_pin in buffer_pins:
         if old_addr is not None:
             if (addr & 0xff) == (old_addr & 0xff):
                 addr >>= 8
@@ -14,60 +35,17 @@ def set_address(io, addr, old_addr=None):
                 continue
             else:
                 old_addr >>= 8
-        port.gpio = addr & 0xff
-        addr >>= 8
-    return return_addr
+
+        for addr_pin in addr_pins:
+            addr_pin.value(addr & 0x01)
+            addr >>= 1
+        buffer_pin.value(1)
+        buffer_pin.value(0)
 
 
-def init_connector(io):
-    # set zero to all pins
-    for chip in range(2):
-        for pin in range(16):
-            write(io, chip, pin, 0)
-
-    # assign input to D7-D0
-    pin_assigns = [
-        (1, 15), (1, 14), (1, 13), (1, 12), (1, 11), (1, 10), (1, 9), (1, 8)
-    ]
-    for data_pin in pin_assigns:
-        init_input(io, data_pin[0], data_pin[1])
-
-
-def read_byte(io):
-    def _read_byte():
-        # D7-D0
-        return io[1].portb.gpio
-
-    return _retry(_read_byte)
-
-
-def read(io, chip, pin):
-    def _read():
-        return io[chip][pin].value()
-
-    return _retry(_read)
-
-
-def write(io, chip, pin, value):
-    def _write():
-        io[chip][pin].output(value)
-
-    return _retry(_write)
-
-
-def init_input(io, chip, pin):
-    def _init_input():
-        io[chip][pin].input()
-
-    return _retry(_init_input)
-
-
-def _retry(func):
-    retry = 0
-    while retry < 10:
-        try:
-            return func()
-        except OSError:
-            retry += 1
-            time.sleep_ms(1)
-            print('retry')
+def read_byte(read_pins):
+    byte = 0
+    for read_pin in reversed(read_pins):
+        byte <<= 1
+        byte |= read_pin.value()
+    return byte

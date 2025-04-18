@@ -2,14 +2,14 @@ import rom_interface
 import sys
 import ubinascii
 
+
 class Dumper:
-    def __init__(self, io):
-        self._io = io
-        rom_interface.init_connector(io)
+    def __init__(self):
+        self.read_pins = rom_interface.init_connector()
 
     def dump(self, addr, size):
         print('dump')
-        data = self._load_data(int(addr), int(size))
+        data = self._load_data(int(addr, 16), int(size))
         print('send')
         self._send_data(data)
         print('done')
@@ -28,8 +28,9 @@ class Dumper:
         data = bytearray(size)
         cache_addr = None
         for i in range(size):
-            cache_addr = rom_interface.set_address(self._io, addr + i, cache_addr)
-            data[i] = rom_interface.read_byte(self._io)
+            rom_interface.set_address(addr + i, cache_addr)
+            cache_addr = addr + i
+            data[i] = rom_interface.read_byte(self.read_pins)
         return data
 
     @staticmethod

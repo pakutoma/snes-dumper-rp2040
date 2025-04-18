@@ -1,18 +1,11 @@
 import sys
 
-from machine import Pin, I2C
-
 from dumper import Dumper
-from mcp23017 import MCP23017
 
 
 def main():
-    i2c = I2C(0, scl=Pin(17), sda=Pin(16), freq=100000)
-    print('i2c scan')
-    addrs = i2c.scan()
-    io = [MCP23017(i2c, addrs[0]), MCP23017(i2c, addrs[1])]
     print('pin init')
-    dumper = Dumper(io)
+    dumper = Dumper()
     print('ready')
     while True:
         line = sys.stdin.readline()

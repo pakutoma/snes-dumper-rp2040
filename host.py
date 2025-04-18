@@ -4,7 +4,7 @@ import base64
 
 def main(i = 0):
     print('connecting to serial port...')
-    ser = serial.Serial('COM4')
+    ser = serial.Serial('COM5')
     print('connected')
     print('read rom header')
     ser.write(b'header\n')
@@ -42,7 +42,7 @@ def main(i = 0):
 class Header:
     def __init__(self, data):
         try:
-            self.title = data[0:20].decode('ascii')
+            self.title = data[0:21].decode('ascii')
         except UnicodeDecodeError:
             self.title = bytes([(i if i < 0x80 else 0x3f) for i in data[0:20]]).decode('ascii')
         self.rom_speed = 'Fast' if data[21] >> 4 & 1 else 'Slow'

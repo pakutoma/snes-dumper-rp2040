@@ -9,9 +9,7 @@ def main():
     print('ready')
     while True:
         line = sys.stdin.readline()
-        if line == 'header\n':
-            dumper.read_header()
-        elif line[0:4] == 'dump':
+        if line[0:4] == 'dump':
             dumper.dump(*line[5:].split(' '))
         elif line == 'exit\n':
             break

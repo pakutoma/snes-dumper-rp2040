@@ -16,10 +16,10 @@ def main(i = 0):
     rom_data = dump_rom(ser, header)
     print('ROM data received')
     print('calc checksum')
-    checksum = calc_checksum(rom_data)
+    checksum = calc_checksum(rom_data, header.rom_type == 'ExHiROM')
     print(f'checksum: {checksum:04x}')
     print(f'header checksum: {header.checksum:04x}')
-    if checksum != header.checksum:
+    if checksum != header.checksum and header.rom_type != 'ExHiROM':
         print('checksum mismatch')
         try:
             print('verify rom data')
@@ -30,7 +30,7 @@ def main(i = 0):
             print(e)
     ser.close()
     print('writing rom data to file...')
-    checksum = calc_checksum(rom_data)
+    checksum = calc_checksum(rom_data, header.rom_type == 'ExHiROM')
     rom_name = header.title.strip().replace(" ", "_") + (f'_checksum_mismatch_{i}' if checksum != header.checksum else '')
     with open(f'{rom_name}.sfc', 'wb') as f:
         f.write(rom_data)
@@ -48,12 +48,20 @@ def dump_header(ser: serial):
 class Header:
     def __init__(self, data):
         try:
-            self.title = data[0:21].decode('ascii')
+            self.title = data[0:21].decode('ascii').strip()
         except UnicodeDecodeError:
-            self.title = bytes([(i if i < 0x80 else 0x3f) for i in data[0:20]]).decode('ascii')
+            self.title = bytes([(i if i < 0x80 else 0x3f) for i in data[0:20]]).decode('ascii').strip()
         self.rom_speed = 'Fast' if data[21] >> 4 & 1 else 'Slow'
-        self.rom_type = 'HiROM' if data[21] & 1 else 'LoROM'
-        self.rom_size = 1 << data[23]
+        if data[21] & 0b100:
+            self.rom_type = 'ExHiROM'
+        elif data[21] & 0b001:
+            self.rom_type = 'HiROM'
+        else:
+            self.rom_type = 'LoROM'
+        if self.rom_type == 'ExHiROM':
+            self.rom_size = 1024 * (6 if self.title == 'TALES OF PHANTASIA' else 5)
+        else:
+            self.rom_size = 1 << data[23]
         self.checksum = (data[29] << 8) + data[28]
 
     def __str__(self):
@@ -66,15 +74,15 @@ class Header:
 
 def dump_rom(ser: serial, header: Header):
     rom_data = bytearray()
-    next_addr = get_init_addr(header)
     whole_size = 0
+    next_addr = None
     while True:
         if whole_size >= header.rom_size * 1024:
             break
+        next_addr, size = get_next_addr_and_size(header, next_addr)
         print(f'dump ${next_addr:06x} ({whole_size // 1024}KB / {header.rom_size}KB)')
-        next_addr, size = get_next_addr_and_size(next_addr, header)
         ser.write(f'dump 0x{next_addr:06x} {size}\n'.encode('ascii'))
-        rom_data += receive(ser, size)
+        rom_data += receive(ser, size, header.rom_type != 'LoROM')
         next_addr += size
         whole_size += size
     return rom_data
@@ -86,7 +94,7 @@ def verify_rom(ser: serial, header: Header, rom_data: bytes):
     file_addr = 0
     while True:
         print(f'verify ${cart_addr:06x} ({file_addr // 1024}KB / {header.rom_size}KB)')
-        cart_addr, limit_size = get_next_addr_and_size(cart_addr, header)
+        cart_addr, limit_size = get_next_addr_and_size(header, cart_addr)
         if limit_size == 0:
             break
         chunk_size = min(limit_size, 1024)
@@ -122,7 +130,7 @@ def fix_rom(ser: serial, header: Header, rom_data: bytes, diff_chunks: list[tupl
             reread_chunks[reread_chunk] = reread_chunks.get(reread_chunk, 0) + 1
         most_read_chunk = max(reread_chunks, key=reread_chunks.get)
         fix_rom_data[file_addr:file_addr + error_size] = most_read_chunk
-    checksum = calc_checksum(fix_rom_data)
+    checksum = calc_checksum(fix_rom_data, header.rom_type == 'ExHiROM')
     if checksum != header.checksum:
         raise IOError('fix failed')
     print('fix success')
@@ -137,10 +145,18 @@ def convert_addr_cart_to_file(cart_addr, header):
         return ((cart_addr & 0xff0000) >> 1) + (cart_addr & 0x7fff)
 
 
-def calc_checksum(data):
+def calc_checksum(data: bytes, is_exhirom: bool = False):
     checksum = 0
     for i in range(0, len(data)):
         checksum += data[i]
+    if is_exhirom:
+        rom_limit = 4 * 1024 * 1024
+        size = len(data) - rom_limit
+        num = rom_limit // size
+        print(f'num: {num}, size: {size}')
+        for _ in range(num):
+            for i in range(size):
+                checksum += data[rom_limit + i]
     return ~checksum & 0xffff
 
 
@@ -168,18 +184,29 @@ def read_data(ser, size):
     return base64.b64decode(b64_data)
 
 
-def get_next_addr_and_size(next_addr, header):
-    if next_addr > 0xffffff:
-        return 0, 0
-    bank = next_addr >> 16
-    start_bank = 0x00 if header.rom_type == 'LoROM' else 0xc0
-    if bank >= start_bank + (header.rom_size // (32 if header.rom_type == 'LoROM' else 16)):
-        return 0, 0
-    if header.rom_type == 'LoROM' and next_addr & 0xffff < 0x8000:
-        next_addr += 0x8000
-    size = 0xffff - (next_addr & 0xffff) + 1
+def get_next_addr_and_size(header, next_addr = None):
+    rom_size = header.rom_size * 1024
+    if header.rom_type == 'LoROM':
+        if next_addr is None:
+            return 0x808000, 0x8000
+        if next_addr & 0xffff < 0x8000:
+            next_addr += 0x8000
+        size = 0x10000 - (next_addr & 0xffff)
+    elif header.rom_type == 'HiROM':
+        if next_addr is None:
+            return 0xc00000, rom_size
+        size = rom_size - (next_addr - 0xc00000)
+    else: # ExHiROM
+        if next_addr is None:
+            return 0xc00000, 4 * 1024 * 1024
+        if next_addr >= 0xc00000 and next_addr < 0xffffff:
+            size = 0xffffff - next_addr
+        elif next_addr < 0x7f0000:
+            size = rom_size - (4 * 1024 * 1024) - (next_addr - 0x400000)
+        else: # next_addr >= 0xffffff
+            next_addr = 0x400000
+            size = rom_size - (4 * 1024 * 1024)
     return next_addr, size
-
 
 def get_init_addr(header):
     if header.rom_type == 'LoROM':
